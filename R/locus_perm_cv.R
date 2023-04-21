@@ -56,6 +56,7 @@
 #' @importFrom lattice qq
 #' @importFrom ggplot2 ggplot
 #' @importFrom caret train
+#' @importFrom caret knn3
 #' @importFrom foreach %dopar%
 
 locus_perm_cv<-function(n_perms=30, #number of permutations
@@ -114,7 +115,6 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
     }
 
     #assign cluster
-
     cluster<-parallel::makeCluster(n_cores)
     doParallel::registerDoParallel(cluster)
 
@@ -197,7 +197,7 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       #remove
       remove(a)
 
-    }
+      }
 
     }
 
@@ -212,12 +212,25 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       #pull summaries
       for(i in base::names(results)){
 
-        b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$overall))
-        b$Model="K-Nearest Neighbors"
-        b$Permutation=base::gsub("Permutation_", "", i)
         c<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$rf$overall))
         c$Model="Random Forest"
         c$Permutation=base::gsub("Permutation_", "", i)
+
+        if(unique(is.na(results[[i]]$confusion_matrices$knn))==TRUE){
+
+          b=c
+          b$Model="K-Nearest Neighbors"
+          b[,1:7]=NA
+
+        }else{
+
+          b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$overall))
+          b$Model="K-Nearest Neighbors"
+          b$Permutation=base::gsub("Permutation_", "", i)
+
+        }
+
+
         a<-rbind(a,b,c)
         remove(b,c)
 
@@ -253,17 +266,29 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       #pull summaries for by class
       for(i in base::names(results)){
 
-        b<-base::as.data.frame(results[[i]]$confusion_matrices$knn$byClass)
-        b$Model="K-Nearest Neighbors"
-        b$Class=base::gsub("Class: ", "", base::rownames(b))
-        b$Permutation=base::gsub("Permutation_", "", i)
-        base::rownames(b)=NULL
         c<-base::as.data.frame(results[[i]]$confusion_matrices$rf$byClass)
         c$Model="Random Forest"
         c$Class=base::gsub("Class: ", "", base::rownames(c))
         c$Permutation=base::gsub("Permutation_", "", i)
         base::rownames(c)=NULL
         c$Permutation=base::gsub("Permutation_", "", i)
+
+        if(unique(is.na(results[[i]]$confusion_matrices$knn))==TRUE){
+
+          b<-c
+          b$Model="K-Nearest Neighbors"
+          b[,1:11]=NA
+
+        }else{
+
+          b<-base::as.data.frame(results[[i]]$confusion_matrices$knn$byClass)
+          b$Model="K-Nearest Neighbors"
+          b$Class=base::gsub("Class: ", "", base::rownames(b))
+          b$Permutation=base::gsub("Permutation_", "", i)
+          base::rownames(b)=NULL
+
+        }
+
         a<-rbind(a,b,c)
         remove(b,c)
 
@@ -301,14 +326,20 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
 
       remove(a,b,c,d)
 
+      check<-return_results$By_Class_Parameters
+
+      for(i in 1:ncol(check)){
+        check[,i]<-ifelse(is.na(check[,i]), 0, check[,i])
+      }
+
       #summarize
-      a<-stats::aggregate(. ~ Model+Class, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::mean)
+      a<-stats::aggregate(. ~ Model+Class, data=check[,2:base::ncol(check)], base::mean)
       base::colnames(a)[3:base::ncol(a)]=base::paste("Mean_", base::colnames(a)[3:base::ncol(a)], sep = "")
-      b<-stats::aggregate(. ~ Model+Class, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::min)
+      b<-stats::aggregate(. ~ Model+Class, data=check[,2:base::ncol(check)], base::min)
       base::colnames(b)[3:base::ncol(b)]=base::paste("Min_", base::colnames(b)[3:base::ncol(b)], sep = "")
-      c<-stats::aggregate(. ~ Model+Class, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::max)
+      c<-stats::aggregate(. ~ Model+Class, data=check[,2:base::ncol(check)], base::max)
       base::colnames(c)[3:base::ncol(c)]=base::paste("Max_", base::colnames(c)[3:base::ncol(c)], sep = "")
-      d<-stats::aggregate(. ~ Model+Class, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], stats::sd)
+      d<-stats::aggregate(. ~ Model+Class, data=check[,2:base::ncol(check)], stats::sd)
       base::colnames(d)[3:base::ncol(d)]=base::paste("SD_", base::colnames(d)[3:base::ncol(d)], sep = "")
       a<-base::cbind(a, b[,3:base::ncol(b)],c[,3:base::ncol(c)],d[,3:base::ncol(d)])
       a<-a[,c("Model",
@@ -344,12 +375,20 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       #pull summaries for overall
       for(i in base::names(results)){
 
-        b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$overall))
-        b$Model="K-Nearest Neighbors"
-        b$Permutation=base::gsub("Permutation_", "", i)
         c<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$rf$overall))
         c$Model="Random Forest"
         c$Permutation=base::gsub("Permutation_", "", i)
+
+        if(unique(is.na(results[[i]]$confusion_matrices$knn))==TRUE){
+          b<-c
+          b$Model="K-Nearest Neighbors"
+          b[,1:7]=NA
+        }else{
+          b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$overall))
+          b$Model="K-Nearest Neighbors"
+          b$Permutation=base::gsub("Permutation_", "", i)
+        }
+
         a<-rbind(a,b,c)
         remove(b,c)
 
@@ -385,12 +424,25 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       #pull summaries for by class
       for(i in base::names(results)){
 
-        b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$byClass))
-        b$Model="K-Nearest Neighbors"
-        b$Permutation=base::gsub("Permutation_", "", i)
         c<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$rf$byClass))
         c$Model="Random Forest"
         c$Permutation=base::gsub("Permutation_", "", i)
+
+        if(unique(is.na(results[[i]]$confusion_matrices$knn))==TRUE){
+
+          b=c
+          b$Model="K-Nearest Neighbors"
+          b[,1:11]=NA
+
+        }else{
+
+          b<-base::as.data.frame(base::t(results[[i]]$confusion_matrices$knn$byClass))
+          b$Model="K-Nearest Neighbors"
+          b$Permutation=base::gsub("Permutation_", "", i)
+
+        }
+
+
         a<-rbind(a,b,c)
         remove(b,c)
 
@@ -429,13 +481,19 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
       remove(a,b,c,d)
 
       #summarize
-      a<-stats::aggregate(. ~ Model, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::mean)
+      check<-return_results$By_Class_Parameters
+
+      for(i in 1:ncol(check)){
+        check[,i]<-ifelse(is.na(check[,i]), 0, check[,i])
+      }
+
+      a<-stats::aggregate(. ~ Model, data=check[,2:base::ncol(check)], base::mean)
       base::colnames(a)[2:base::ncol(a)]=base::paste("Mean_", base::colnames(a)[2:base::ncol(a)], sep = "")
-      b<-stats::aggregate(. ~ Model, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::min)
+      b<-stats::aggregate(. ~ Model, data=check[,2:base::ncol(check)], base::min)
       base::colnames(b)[2:base::ncol(b)]=base::paste("Min_", base::colnames(b)[2:base::ncol(b)], sep = "")
-      c<-stats::aggregate(. ~ Model, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], base::max)
+      c<-stats::aggregate(. ~ Model, data=check[,2:base::ncol(check)], base::max)
       base::colnames(c)[2:base::ncol(c)]=base::paste("Max_", base::colnames(c)[2:base::ncol(c)], sep = "")
-      d<-stats::aggregate(. ~ Model, data=return_results$By_Class_Parameters[,2:base::ncol(return_results$By_Class_Parameters)], stats::sd)
+      d<-stats::aggregate(. ~ Model, data=check[,2:base::ncol(check)], stats::sd)
       base::colnames(d)[2:base::ncol(d)]=base::paste("SD_", base::colnames(d)[2:base::ncol(d)], sep = "")
       a<-base::cbind(a, b[,2:base::ncol(b)],c[,2:base::ncol(c)],d[,2:base::ncol(d)])
       a<-a[,c("Model",
@@ -467,6 +525,16 @@ locus_perm_cv<-function(n_perms=30, #number of permutations
 
     #put the raw results in the object
     return_results[["Raw_Permutation_Info"]]<-results
+
+    #check
+    if(length(unique(return_results$Overall_Summary$Model))==1){
+
+      warning(paste("It appears that too many ties were identified in the K-Nearest Neighbors predictions of ",
+                    gene_name,
+                    "... Check your results object for NAs!",
+                    sep = ""))
+
+    }
 
     #return the results
     return(return_results)

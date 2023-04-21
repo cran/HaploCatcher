@@ -51,6 +51,7 @@
 #' @importFrom lattice qq
 #' @importFrom ggplot2 ggplot
 #' @importFrom caret train
+#' @importFrom caret knn3
 #' @importFrom foreach %dopar%
 
 locus_cv<-function(geno_mat, #genotypic matrix
@@ -82,7 +83,7 @@ locus_cv<-function(geno_mat, #genotypic matrix
 
     base::stop("There are duplicated individuals in the 'gene_file' or there are missing FullSampleNames in the 'gene_file'!")
 
-  }else if(base::class(base::try(base::ncol(gene_file[,c("Gene", "FullSampleName", "Call")])))=="try-error"){
+  }else if(base::class(base::try(base::ncol(gene_file[,c("Gene", "FullSampleName", "Call")])))[1]=="try-error"){
 
     base::stop("The 'gene_file' does not have the columns 'Gene', 'FullSampleName', and 'Call'!")
 
@@ -103,6 +104,11 @@ locus_cv<-function(geno_mat, #genotypic matrix
       stop("There appears to be more than 3 catigories in your gene_file... only biallelic loci are supported at this time! Please properly format your file!")
     }
 
+  }
+
+  #check if
+  if(length(unique(classification$Call))==1){
+    stop("There appears to only be one catigorization in your gene data; models cannot be trained on a single call. There must be negative cases present in the data!")
   }
 
   #check if
@@ -161,7 +167,7 @@ locus_cv<-function(geno_mat, #genotypic matrix
   geno_matrix<-geno_mat[base::rownames(geno_mat) %in% classification$FullSampleName,]
 
   #check if
-  if(base::class(base::try(base::ncol(marker_info[,c("Marker", "Chromosome", "BP_Position")])))=="try-error"){
+  if(base::class(base::try(base::ncol(marker_info[,c("Marker", "Chromosome", "BP_Position")])))[1]=="try-error"){
 
     base::stop("columns are misnamed or missing in the 'marker_info'!")
 
@@ -306,11 +312,30 @@ locus_cv<-function(geno_mat, #genotypic matrix
   }
 
   #fit model
-  fit_1<-caret::train(Call ~ .,
-                      data = training[,-1],
-                      method = "knn",
-                      tuneGrid = grid_tune,
-                      trControl = cont_train)
+  fit_1<-try(caret::train(Call ~ .,
+                          data = training[,-1],
+                          method = "knn",
+                          tuneGrid = grid_tune,
+                          trControl = cont_train))
+
+  if(class(fit_1)[1]=="try-error"){
+
+    warning("There appears to be something wrong with repeated CV approach in KNN. Switching to leave one observation out")
+    cont_train_alt<-caret::trainControl(method="LOOCV")
+    fit_1<-try(caret::train(Call ~ .,
+                            data = training[,-1],
+                            method = "knn",
+                            tuneGrid = grid_tune,
+                            trControl = cont_train_alt))
+
+    if(class(fit_1)[1]=="try-error"){
+
+      stop("Something went wrong in hyperparameter tunin of KNN... check data structure!")
+
+    }
+
+
+  }
 
   #check number of markers
   if(ncor_markers<5){
@@ -330,11 +355,29 @@ locus_cv<-function(geno_mat, #genotypic matrix
     }
 
   #fit model
-  fit_2<-caret::train(Call ~ .,
-                      data = training[,-1],
-                      method = "rf",
-                      tuneGrid = grid_tune,
-                      trControl = cont_train)
+  fit_2<-try(caret::train(Call ~ .,
+                          data = training[,-1],
+                          method = "rf",
+                          tuneGrid = grid_tune,
+                          trControl = cont_train))
+
+  if(class(fit_2)[1]=="try-error"){
+
+    warning("There appears to be something wrong with repeated CV approach in RF. Switching to leave one observation out...")
+    cont_train_alt<-caret::trainControl(method="LOOCV")
+    fit_2<-try(caret::train(Call ~ .,
+                            data = training[,-1],
+                            method = "knn",
+                            tuneGrid = grid_tune,
+                            trControl = cont_train_alt))
+
+    if(class(fit_2)[1]=="try-error"){
+
+      stop("Something went wrong in hyperparameter tuning of RF... check data structure!")
+
+    }
+
+  }
 
   #send message
   if(verbose==TRUE){base::print("Note: Done!")}
@@ -352,18 +395,150 @@ locus_cv<-function(geno_mat, #genotypic matrix
   if(verbose==TRUE){base::print("Note: Producing predictions and calculating confusion matricies on the test population")}
 
   #predict
+  pred_1<-try(stats::predict(fit_1, test[,-1]))
+
+  #catch if the predictions for KNN have too many ties
+  if(class(pred_1)[1]=="try-error"){
+
+    #submit warning
+    warning("There were too many ties generated in the K-Nearest Neighbors predictions. Producing NAs for results...")
+
+    pred_1<-base::data.frame(FullSampleName=test[,1],
+                             Model = "K-Nearest Neighbors",
+                             Gene=gene_name,
+                             Observed_Call=test[,2],
+                             Predicted_Call=NA)
+
+    pred_2<-stats::predict(fit_2, test[,-1])
+    pred_2<-base::data.frame(FullSampleName=test[,1],
+                             Model = "Random Forest",
+                             Gene=gene_name,
+                             Observed_Call=test[,2],
+                             Predicted_Call=pred_2)
+
+    confu_1<-NA
+    confu_2<-caret::confusionMatrix(pred_2$Observed_Call,
+                                    pred_2$Predicted_Call)
+    if(verbose==TRUE){
+
+      base::print("There were too many ties for the K-Nearest Neighbors predictions. No results reported!")
+      base::print(knitr::kable(confu_2$table, caption = "Confusion matrix of Random Forest predictions"))
+
+    }
+
+    #show results of models
+    a<-base::data.frame(Parameters=names(confu_2$overall),
+                        `K-Nearest Neighbors`=NA,
+                        `Random Forest`=confu_2$overall,
+                        check.names = FALSE,
+                        row.names = NULL)
+    a$Parameters=c("Accuracy",
+                   "Kappa",
+                   "Accuracy_Lower_CI",
+                   "Accuracy_Upper_CI",
+                   "Accuracy_Null",
+                   "Accuracy_P_Value",
+                   "Mcnemar_P_Value")
+
+    if(verbose==TRUE){
+
+      base::print(knitr::kable(a, caption = "Overall Accuracy Parameters", digits = 3))
+
+    }
+
+    #show results of models
+    if(include_hets==FALSE){
+
+      a<-base::data.frame(Parameters=names(confu_2$byClass),
+                          `K-Nearest Neighbors`=NA,
+                          `Random Forest`=confu_2$byClass,
+                          check.names = FALSE,
+                          row.names = NULL)
+      a<-a[c(1,2,5,6,11),]
+      a$Parameters[5]="Balanced_Accuracy"
+      base::rownames(a)=NULL
+
+      if(verbose==TRUE){
+
+        base::print(knitr::kable(a, caption = "By-Class Accuracy Parameters", digits = 3))
+
+      }
+
+    }
+
+    if(include_hets==TRUE){
+
+      a<-base::as.data.frame(base::rbind(confu_2$byClass, confu_2$byClass))
+      a$Model=c(base::rep("K-Nearest Neighbors", 3), base::rep("Random Forest",3))
+      a$Class=base::rownames(a)
+      a$Class=base::gsub("Class..", "", a$Class)
+      a$Class=base::gsub("[.1]", "", a$Class)
+      a<-a[,c("Model",
+              "Class",
+              "Sensitivity",
+              "Specificity",
+              "Precision",
+              "Recall",
+              "Balanced Accuracy")]
+      a[1:3,2:ncol(a)]=NA
+      base::colnames(a)[7]="Balanced_Accuracy"
+      rownames(a)=NULL
+
+      if(verbose==TRUE){
+
+        base::print(knitr::kable(a, caption = "By-Class Accuracy Parameters", digits = 3))
+
+      }
+
+    }
+
+    #make results object
+    confu<-base::list(knn=NA,
+                      rf=confu_2)
+    preds<-base::list(knn=NA,
+                      rf=pred_2)
+    models<-base::list(knn=NA,
+                       rf=fit_2)
+    data<-base::list(training=training,
+                     test=test)
+
+    if(include_models==TRUE){
+
+      if(verbose==TRUE){base::print("Note: User has request that models remain in the results object")}
+      results<-base::list(data_frames=data,
+                          trained_models=models,
+                          test_predictions=preds,
+                          confusion_matrices=confu)
+
+    }else if(include_models==FALSE){
+
+      if(verbose==TRUE){base::print("Note: User has request that models are omitted from the results object")}
+      results<-base::list(data_frames=data,
+                          test_predictions=preds,
+                          confusion_matrices=confu)
+
+    }
+
+    #retrun the results
+    return(results)
+
+  }
+
+  #otherwise proceed as normally
+  #predict
   pred_1<-stats::predict(fit_1, test[,-1])
   pred_1<-base::data.frame(FullSampleName=test[,1],
                            Model = "K-Nearest Neighbors",
                            Gene=gene_name,
-                           Observed_Call=test[,2],
-                           Predicted_Call=pred_1)
+                           Observed_Call=factor(test[,2], levels = unique(classification$Call)),
+                           Predicted_Call=factor(pred_1, levels = unique(classification$Call)))
+
   pred_2<-stats::predict(fit_2, test[,-1])
   pred_2<-base::data.frame(FullSampleName=test[,1],
                            Model = "Random Forest",
                            Gene=gene_name,
-                           Observed_Call=test[,2],
-                           Predicted_Call=pred_2)
+                           Observed_Call=factor(test[,2], levels = unique(classification$Call)),
+                           Predicted_Call=factor(pred_2, levels = unique(classification$Call)))
 
   #calculate confusion matraix
   confu_1<-caret::confusionMatrix(pred_1$Observed_Call,
